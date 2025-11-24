@@ -1,0 +1,11 @@
+# Huffman benchmark
+# command: /home/shane/miniconda3/bin/python3 bench.py /home/shane/lessup/encoding/tests/data/random_10MiB.bin
+# cwd: /home/shane/lessup/encoding/huffman/benchmark
+# returncode: 1
+
+Command failed: go build -o huffman_go .
+warning: GOPATH set to GOROOT (/home/shane/go) has no effect
+go: cannot find main module, but found .git/config in /home/shane/lessup/encoding
+	to create a module there, run:
+	cd ../.. && go mod init
+
