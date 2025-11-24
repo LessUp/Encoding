@@ -1,0 +1,15 @@
+[package]
+name = "rangecoder"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "rangecoder"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
+[dev-dependencies]
+rand = "0.8" 
