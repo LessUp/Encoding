@@ -25,7 +25,7 @@
 - **arithmetic/**
   - **cpp/** C++ 算术编码实现，`main.cpp` 提供文件级 encode/decode 与 CLI
 - **range/**
-  - **cpp/**  预留 C++ 实现目录
+  - **cpp/**  C++ 实现，`main.cpp` 提供 CLI（`rangecoder_cpp`）
   - **go/**   Go 区间编码库 `rangecoder.go`，以及 `rangecoder_test.go` 中的基准测试
   - **rust/** Rust crate `rangecoder`，`src/lib.rs` 为库，`src/bin/bench.rs` 为基准程序
 - **Run-Length/**
@@ -175,15 +175,15 @@ python3 bench.py /path/to/input.bin
 
 本仓库提供统一脚本 `scripts/run_all_bench.py`，会：
 
-- **生成测试数据**：调用 `tests/gen_testdata.py`（例如 `tests/data/random_10MiB.bin`）。
+- **生成测试数据**：调用 `tests/gen_testdata.py`（数据会生成到 `tests/data/`，其中的 `.bin` 文件默认不纳入版本控制）。
 - **依次运行** Huffman / Arithmetic / Range coder / Run-Length 的基准测试。
-- **将原始输出** 写入 `reports/*.txt`，文件名中包含时间戳。
+- **将原始输出** 写入 `reports/*.txt`，文件名中包含时间戳（`reports/` 默认不纳入版本控制）。
 
-下面是一次在本机运行 `python scripts/run_all_bench.py` 得到的部分结果，主要用于展示输出格式与量级，**不同环境上的绝对数值会有差异**。
+下面是一次在本机运行 `python scripts/run_all_bench.py` 的示例输出节选，主要用于展示输出格式与量级，**不同环境上的绝对数值会有差异**。
 
 ### 算术编码 C++（10 MiB 随机数据）
 
-取自 `reports/arithmetic_cpp_report_20251124-132655.txt`：
+示例输出（节选）：
 
 | 算法       | 语言 | 输入大小 (bytes) | 编译时间 (s) | 编码时间 (s) | 解码时间 (s) | 总时间 (s) | 压缩比 (压缩后/原始) |
 | ---------- | ---- | ---------------- | ------------ | ------------ | ------------ | ---------- | --------------------- |
@@ -191,7 +191,7 @@ python3 bench.py /path/to/input.bin
 
 ### Range coder Rust（1 MiB 合成数据 × 20 次）
 
-取自 `reports/range_rust_report_20251124-132655.txt`：
+示例输出（节选）：
 
 | 算法        | 语言 | 单次输入大小 (bytes) | 迭代次数 | 编码时间 (s) | 编码吞吐 (MiB/s) | 解码时间 (s) | 解码吞吐 (MiB/s) | 编码后大小 (bytes) |
 | ----------- | ---- | -------------------- | -------- | ------------ | ---------------- | ------------ | ---------------- | ------------------- |
@@ -200,7 +200,7 @@ python3 bench.py /path/to/input.bin
 > 提示：
 >
 > - 若想获取最新结果，可在仓库根目录运行：`python scripts/run_all_bench.py`。
-> - 更详细的构建时间、错误信息和其他算法（如 Huffman、RLE、Go/Rust 版本）的输出，请直接查看 `reports/` 目录下对应的 `.txt` 文件。
+> - 更详细的构建时间、错误信息和其他算法（如 Huffman、RLE、Go/Rust 版本）的输出，请查看脚本运行后本地生成的 `reports/` 目录下对应的 `.txt` 文件（该目录默认不纳入版本控制）。
 
 ---
 
