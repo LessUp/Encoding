@@ -272,36 +272,39 @@ static void write_frequencies(std::ostream& out, const std::vector<uint32_t>& fr
     }
 }
 
-static std::vector<uint32_t> read_frequencies(std::istream& in) {
+static bool read_frequencies(std::istream& in, std::vector<uint32_t>& freq) {
     uint32_t count = 0;
     in.read(reinterpret_cast<char*>(&count), sizeof(count));
-    if (!in || count == 0 || count > 1024) {
-        return std::vector<uint32_t>(SYMBOL_LIMIT, 1);
+    if (!in) {
+        std::cerr << "Failed to read frequency table\n";
+        return false;
     }
-    std::vector<uint32_t> freq(count, 0);
+    if (count != SYMBOL_LIMIT) {
+        std::cerr << "Bad frequency table size: " << count << "\n";
+        return false;
+    }
+    freq.assign(count, 0);
     in.read(reinterpret_cast<char*>(freq.data()), freq.size() * sizeof(uint32_t));
     if (!in) {
-        return std::vector<uint32_t>(SYMBOL_LIMIT, 1);
+        std::cerr << "Failed to read frequency table\n";
+        return false;
     }
-    if (freq.size() != SYMBOL_LIMIT) {
-        freq.assign(SYMBOL_LIMIT, 1);
-    }
-    return freq;
+    return true;
 }
 
-static void compress_file(const std::string& inputPath, const std::string& outputPath) {
+static bool compress_file(const std::string& inputPath, const std::string& outputPath) {
     std::vector<uint32_t> freq = build_frequencies_from_file(inputPath);
     std::vector<uint32_t> cumulative = build_cumulative(freq);
 
     std::ifstream in(inputPath, std::ios::binary);
     if (!in) {
         std::cerr << "Cannot open input file for reading\n";
-        return;
+        return false;
     }
     std::ofstream out(outputPath, std::ios::binary);
     if (!out) {
         std::cerr << "Cannot open output file for writing\n";
-        return;
+        return false;
     }
 
     const char magic[4] = {'A', 'E', 'N', 'C'};
@@ -318,28 +321,42 @@ static void compress_file(const std::string& inputPath, const std::string& outpu
     }
     encoder.encode_symbol(EOF_SYMBOL, cumulative);
     encoder.finish();
+
+    if (in.bad()) {
+        std::cerr << "Failed to read input file\n";
+        return false;
+    }
+    if (!out) {
+        std::cerr << "Failed to write output file\n";
+        return false;
+    }
+
+    return true;
 }
 
-static void decompress_file(const std::string& inputPath, const std::string& outputPath) {
+static bool decompress_file(const std::string& inputPath, const std::string& outputPath) {
     std::ifstream in(inputPath, std::ios::binary);
     if (!in) {
         std::cerr << "Cannot open input file for reading\n";
-        return;
+        return false;
     }
     char magic[4] = {};
     in.read(magic, sizeof(magic));
     if (!in || magic[0] != 'A' || magic[1] != 'E' || magic[2] != 'N' || magic[3] != 'C') {
         std::cerr << "Invalid input file format\n";
-        return;
+        return false;
     }
 
-    std::vector<uint32_t> freq = read_frequencies(in);
+    std::vector<uint32_t> freq;
+    if (!read_frequencies(in, freq)) {
+        return false;
+    }
     std::vector<uint32_t> cumulative = build_cumulative(freq);
 
     std::ofstream out(outputPath, std::ios::binary);
     if (!out) {
         std::cerr << "Cannot open output file for writing\n";
-        return;
+        return false;
     }
 
     BitReader bitReader(in);
@@ -353,9 +370,12 @@ static void decompress_file(const std::string& inputPath, const std::string& out
         unsigned char b = static_cast<unsigned char>(sym);
         out.put(static_cast<char>(b));
         if (!out) {
-            break;
+            std::cerr << "Failed to write output file\n";
+            return false;
         }
     }
+
+    return true;
 }
 
 int main(int argc, char** argv) {
@@ -367,14 +387,16 @@ int main(int argc, char** argv) {
     std::string inputPath = argv[2];
     std::string outputPath = argv[3];
 
+    bool ok = true;
+
     if (mode == "encode") {
-        compress_file(inputPath, outputPath);
+        ok = compress_file(inputPath, outputPath);
     } else if (mode == "decode") {
-        decompress_file(inputPath, outputPath);
+        ok = decompress_file(inputPath, outputPath);
     } else {
         std::cerr << "Unknown mode\n";
         return 1;
     }
 
-    return 0;
+    return ok ? 0 : 1;
 }

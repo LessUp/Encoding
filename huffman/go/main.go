@@ -184,31 +184,19 @@ func writeFrequencies(w io.Writer, freq []uint32) error {
 	return nil
 }
 
-func readFrequencies(r io.Reader) []uint32 {
+func readFrequencies(r io.Reader) ([]uint32, error) {
 	var count uint32
-	if err := binary.Read(r, binary.LittleEndian, &count); err != nil || count == 0 || count > 1024 {
-		freq := make([]uint32, SymbolLimit)
-		for i := range freq {
-			freq[i] = 1
-		}
-		return freq
+	if err := binary.Read(r, binary.LittleEndian, &count); err != nil {
+		return nil, fmt.Errorf("读取频率表失败: %w", err)
+	}
+	if count != uint32(SymbolLimit) {
+		return nil, fmt.Errorf("频率表大小异常: %d", count)
 	}
 	freq := make([]uint32, count)
 	if err := binary.Read(r, binary.LittleEndian, freq); err != nil {
-		f := make([]uint32, SymbolLimit)
-		for i := range f {
-			f[i] = 1
-		}
-		return f
+		return nil, fmt.Errorf("读取频率表失败: %w", err)
 	}
-	if len(freq) != SymbolLimit {
-		f := make([]uint32, SymbolLimit)
-		for i := range f {
-			f[i] = 1
-		}
-		return f
-	}
-	return freq
+	return freq, nil
 }
 
 func buildCodes(node *Node, codes []string, prefix []byte) {
@@ -229,7 +217,7 @@ func buildCodes(node *Node, codes []string, prefix []byte) {
 	buildCodes(node.right, codes, prefix)
 }
 
-func compressFile(inputPath, outputPath string) {
+func compressFile(inputPath, outputPath string) error {
 	freq := buildFrequenciesFromFile(inputPath)
 	root := buildTree(freq)
 	codes := make([]string, SymbolLimit)
@@ -237,29 +225,30 @@ func compressFile(inputPath, outputPath string) {
 
 	inFile, err := os.Open(inputPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot open input file for reading")
-		return
+		return fmt.Errorf("无法打开输入文件用于读取: %s: %w", inputPath, err)
 	}
 	defer inFile.Close()
 	outFile, err := os.Create(outputPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot open output file for writing")
-		return
+		return fmt.Errorf("无法打开输出文件用于写入: %s: %w", outputPath, err)
 	}
 	defer outFile.Close()
 
 	if _, err := outFile.Write([]byte{'H', 'F', 'M', 'N'}); err != nil {
-		return
+		return err
 	}
 	if err := writeFrequencies(outFile, freq); err != nil {
-		return
+		return err
 	}
 	bw := NewBitWriter(outFile)
 	r := bufio.NewReader(inFile)
 	for {
 		b, err := r.ReadByte()
-		if err != nil {
+		if err == io.EOF {
 			break
+		}
+		if err != nil {
+			return fmt.Errorf("读取输入文件失败: %w", err)
 		}
 		code := codes[int(b)]
 		for i := 0; i < len(code); i++ {
@@ -268,7 +257,7 @@ func compressFile(inputPath, outputPath string) {
 				bit = 1
 			}
 			if err := bw.WriteBit(bit); err != nil {
-				return
+				return err
 			}
 		}
 	}
@@ -279,41 +268,45 @@ func compressFile(inputPath, outputPath string) {
 			bit = 1
 		}
 		if err := bw.WriteBit(bit); err != nil {
-			return
+			return err
 		}
 	}
-	_ = bw.Flush()
+	if err := bw.Flush(); err != nil {
+		return err
+	}
+	return nil
 }
 
-func decompressFile(inputPath, outputPath string) {
+func decompressFile(inputPath, outputPath string) error {
 	inFile, err := os.Open(inputPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot open input file for reading")
-		return
+		return fmt.Errorf("无法打开输入文件用于读取: %s: %w", inputPath, err)
 	}
 	defer inFile.Close()
 	r := bufio.NewReader(inFile)
 
 	magic := make([]byte, 4)
 	if _, err := io.ReadFull(r, magic); err != nil || magic[0] != 'H' || magic[1] != 'F' || magic[2] != 'M' || magic[3] != 'N' {
-		fmt.Fprintln(os.Stderr, "Invalid input file format")
-		return
+		return fmt.Errorf("输入文件格式非法")
 	}
 
-	freq := readFrequencies(r)
+	freq, err := readFrequencies(r)
+	if err != nil {
+		return err
+	}
 	root := buildTree(freq)
 	if root == nil {
-		return
+		return fmt.Errorf("解码失败")
 	}
 
 	outFile, err := os.Create(outputPath)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "Cannot open output file for writing")
-		return
+		return fmt.Errorf("无法打开输出文件用于写入: %s: %w", outputPath, err)
 	}
 	defer outFile.Close()
 	w := bufio.NewWriter(outFile)
-	defer w.Flush()
+
+	sawEOF := false
 
 	br := NewBitReader(r)
 	node := root
@@ -323,21 +316,22 @@ func decompressFile(inputPath, outputPath string) {
 			if node.left != nil {
 				node = node.left
 			} else {
-				break
+				return fmt.Errorf("输入数据损坏或截断")
 			}
 		} else {
 			if node.right != nil {
 				node = node.right
 			} else {
-				break
+				return fmt.Errorf("输入数据损坏或截断")
 			}
 		}
 		if isLeaf(node) {
 			if node.symbol == uint32(EOFSymbol) {
+				sawEOF = true
 				break
 			}
 			if err := w.WriteByte(byte(node.symbol)); err != nil {
-				break
+				return err
 			}
 			node = root
 		}
@@ -345,14 +339,26 @@ func decompressFile(inputPath, outputPath string) {
 			break
 		}
 	}
+
+	if !sawEOF {
+		return fmt.Errorf("输入数据损坏或截断")
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func HuffmanEncodeFile(inputPath, outputPath string) {
-	compressFile(inputPath, outputPath)
+	if err := compressFile(inputPath, outputPath); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+	}
 }
 
 func HuffmanDecodeFile(inputPath, outputPath string) {
-	decompressFile(inputPath, outputPath)
+	if err := decompressFile(inputPath, outputPath); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+	}
 }
 
 func main() {
@@ -364,12 +370,18 @@ func main() {
 	inputPath := os.Args[2]
 	outputPath := os.Args[3]
 
+	var err error
+
 	if mode == "encode" {
-		HuffmanEncodeFile(inputPath, outputPath)
+		err = compressFile(inputPath, outputPath)
 	} else if mode == "decode" {
-		HuffmanDecodeFile(inputPath, outputPath)
+		err = decompressFile(inputPath, outputPath)
 	} else {
 		fmt.Fprintln(os.Stderr, "Unknown mode")
+		os.Exit(1)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }

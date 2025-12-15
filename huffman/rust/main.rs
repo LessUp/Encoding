@@ -217,30 +217,30 @@ fn write_frequencies<W: Write>(writer: &mut W, freq: &[u32]) -> io::Result<()> {
     Ok(())
 }
 
-fn read_frequencies<R: Read>(reader: &mut R) -> Vec<u32> {
+fn read_frequencies<R: Read>(reader: &mut R) -> io::Result<Vec<u32>> {
     let mut count_bytes = [0u8; 4];
-    if reader.read_exact(&mut count_bytes).is_err() {
-        return default_frequencies();
+    reader
+        .read_exact(&mut count_bytes)
+        .map_err(|e| io::Error::new(e.kind(), format!("读取频率表失败: {e}")))?;
+
+    let count = u32::from_le_bytes(count_bytes) as usize;
+    if count != SYMBOL_LIMIT {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("频率表大小异常: {count}"),
+        ));
     }
-    let count = u32::from_le_bytes(count_bytes);
-    if count == 0 || count > 1024 {
-        return default_frequencies();
-    }
-    let mut buf = vec![0u8; count as usize * 4];
-    if reader.read_exact(&mut buf).is_err() {
-        return default_frequencies();
-    }
-    let mut freq = vec![0u32; count as usize];
-    for i in 0..count as usize {
-        let start = i * 4;
+
+    let mut freq = vec![0u32; count];
+    for f in freq.iter_mut() {
         let mut arr = [0u8; 4];
-        arr.copy_from_slice(&buf[start..start + 4]);
-        freq[i] = u32::from_le_bytes(arr);
+        reader
+            .read_exact(&mut arr)
+            .map_err(|e| io::Error::new(e.kind(), format!("读取频率表失败: {e}")))?;
+        *f = u32::from_le_bytes(arr);
     }
-    if freq.len() != SYMBOL_LIMIT {
-        return default_frequencies();
-    }
-    freq
+
+    Ok(freq)
 }
 
 fn build_codes(node: &Node, codes: &mut [String], prefix: &mut String) {
@@ -309,10 +309,9 @@ fn decompress_file(input_path: &str, output_path: &str) -> io::Result<()> {
     let mut magic = [0u8; 4];
     reader.read_exact(&mut magic)?;
     if &magic != b"HFMN" {
-        eprintln!("Invalid input file format");
-        return Ok(());
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "输入文件格式非法"));
     }
-    let freq = read_frequencies(&mut reader);
+    let freq = read_frequencies(&mut reader)?;
     let root = build_tree(&freq);
 
     let output_file = File::create(output_path)?;
@@ -320,6 +319,7 @@ fn decompress_file(input_path: &str, output_path: &str) -> io::Result<()> {
 
     let mut bit_reader = BitReader::new(reader);
     let mut node_ref: &Node = &root;
+    let mut saw_eof = false;
     loop {
         let bit = bit_reader.read_bit();
         if bit == 0 {
@@ -327,18 +327,23 @@ fn decompress_file(input_path: &str, output_path: &str) -> io::Result<()> {
                 Some(ref left) => {
                     node_ref = left;
                 }
-                None => break,
+                None => {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "输入数据损坏或截断"));
+                }
             }
         } else {
             match node_ref.right {
                 Some(ref right) => {
                     node_ref = right;
                 }
-                None => break,
+                None => {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData, "输入数据损坏或截断"));
+                }
             }
         }
         if is_leaf(node_ref) {
             if node_ref.symbol == EOF_SYMBOL {
+                saw_eof = true;
                 break;
             }
             writer.write_all(&[node_ref.symbol as u8])?;
@@ -347,6 +352,10 @@ fn decompress_file(input_path: &str, output_path: &str) -> io::Result<()> {
         if bit_reader.eof() && std::ptr::eq(node_ref, &root) {
             break;
         }
+    }
+
+    if !saw_eof {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "输入数据损坏或截断"));
     }
     writer.flush()?;
     Ok(())
@@ -363,7 +372,7 @@ pub fn huffman_decode_file(input_path: &str, output_path: &str) -> io::Result<()
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 4 {
-        eprintln!("Usage: {} encode|decode input output", args[0]);
+        eprintln!("用法: {} encode|decode input output", args[0]);
         process::exit(1);
     }
     let mode = &args[1];
@@ -375,11 +384,12 @@ fn main() {
     } else if mode == "decode" {
         huffman_decode_file(input_path, output_path)
     } else {
-        eprintln!("Unknown mode");
+        eprintln!("未知模式，应为 encode 或 decode");
         process::exit(1);
     };
 
-    if let Err(_) = result {
+    if let Err(e) = result {
+        eprintln!("运行失败: {e}");
         process::exit(1);
     }
 }

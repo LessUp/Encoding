@@ -13,33 +13,32 @@ import (
 // 三种语言（C++/Go/Rust）都使用相同的格式，方便交叉解码与基准测试。
 
 // RLEEncodeFile 对整个文件执行 Run-Length 编码。
-func RLEEncodeFile(inputPath, outputPath string) {
+func rleEncodeFile(inputPath, outputPath string) error {
     in, err := os.Open(inputPath)
     if err != nil {
-        fmt.Fprintf(os.Stderr, "无法打开输入文件用于读取: %s\n", inputPath)
-        return
+        return fmt.Errorf("无法打开输入文件用于读取: %s: %w", inputPath, err)
     }
     defer in.Close()
 
     out, err := os.Create(outputPath)
     if err != nil {
-        fmt.Fprintf(os.Stderr, "无法打开输出文件用于写入: %s\n", outputPath)
-        return
+        return fmt.Errorf("无法打开输出文件用于写入: %s: %w", outputPath, err)
     }
     defer out.Close()
 
     r := bufio.NewReader(in)
     w := bufio.NewWriter(out)
-    defer w.Flush()
 
     first, err := r.ReadByte()
     if err == io.EOF {
-        // 空文件，直接返回
-        return
+        // 空文件，编码结果也是空文件。
+        if err := w.Flush(); err != nil {
+            return err
+        }
+        return nil
     }
     if err != nil {
-        fmt.Fprintln(os.Stderr, "读取输入文件失败:", err)
-        return
+        return fmt.Errorf("读取输入文件失败: %w", err)
     }
 
     current := first
@@ -50,25 +49,35 @@ func RLEEncodeFile(inputPath, outputPath string) {
         if err == io.EOF {
             // 写出最后一段
             if err := writeRun(w, count, current); err != nil {
-                fmt.Fprintln(os.Stderr, "写入 RLE 数据失败:", err)
+                return fmt.Errorf("写入 RLE 数据失败: %w", err)
             }
             break
         }
         if err != nil {
-            fmt.Fprintln(os.Stderr, "读取输入文件失败:", err)
-            return
+            return fmt.Errorf("读取输入文件失败: %w", err)
         }
 
         if b == current && count < ^uint32(0) {
             count++
         } else {
             if err := writeRun(w, count, current); err != nil {
-                fmt.Fprintln(os.Stderr, "写入 RLE 数据失败:", err)
-                return
+                return fmt.Errorf("写入 RLE 数据失败: %w", err)
             }
             current = b
             count = 1
         }
+    }
+
+    if err := w.Flush(); err != nil {
+        return err
+    }
+    return nil
+}
+
+// RLEEncodeFile 对整个文件执行 Run-Length 编码。
+func RLEEncodeFile(inputPath, outputPath string) {
+    if err := rleEncodeFile(inputPath, outputPath); err != nil {
+        fmt.Fprintln(os.Stderr, err)
     }
 }
 
@@ -86,24 +95,21 @@ func writeRun(w *bufio.Writer, count uint32, value byte) error {
 }
 
 // RLEDecodeFile 将 RLE 编码文件解码为原始字节序列。
-func RLEDecodeFile(inputPath, outputPath string) {
+func rleDecodeFile(inputPath, outputPath string) error {
     in, err := os.Open(inputPath)
     if err != nil {
-        fmt.Fprintf(os.Stderr, "无法打开输入文件用于读取: %s\n", inputPath)
-        return
+        return fmt.Errorf("无法打开输入文件用于读取: %s: %w", inputPath, err)
     }
     defer in.Close()
 
     out, err := os.Create(outputPath)
     if err != nil {
-        fmt.Fprintf(os.Stderr, "无法打开输出文件用于写入: %s\n", outputPath)
-        return
+        return fmt.Errorf("无法打开输出文件用于写入: %s: %w", outputPath, err)
     }
     defer out.Close()
 
     r := bufio.NewReader(in)
     w := bufio.NewWriter(out)
-    defer w.Flush()
 
     buf := make([]byte, 4096)
 
@@ -115,25 +121,20 @@ func RLEDecodeFile(inputPath, outputPath string) {
                 break
             }
             if err == io.ErrUnexpectedEOF {
-                fmt.Fprintln(os.Stderr, "RLE 数据截断：无法读取完整的 count 字段")
-                return
+                return fmt.Errorf("RLE 数据截断：无法读取完整的 count 字段")
             }
-            fmt.Fprintln(os.Stderr, "读取 count 失败:", err)
-            return
+            return fmt.Errorf("读取 count 失败: %w", err)
         }
         if count == 0 {
-            fmt.Fprintln(os.Stderr, "RLE 数据非法：count 不应为 0")
-            return
+            return fmt.Errorf("RLE 数据非法：count 不应为 0")
         }
 
         value, err := r.ReadByte()
         if err != nil {
             if err == io.EOF {
-                fmt.Fprintln(os.Stderr, "RLE 数据截断：缺少 value 字节")
-            } else {
-                fmt.Fprintln(os.Stderr, "读取 value 失败:", err)
+                return fmt.Errorf("RLE 数据截断：缺少 value 字节")
             }
-            return
+            return fmt.Errorf("读取 value 失败: %w", err)
         }
 
         // 将 (count, value) 展开写回输出
@@ -146,11 +147,22 @@ func RLEDecodeFile(inputPath, outputPath string) {
                 buf[i] = value
             }
             if _, err := w.Write(buf[:chunk]); err != nil {
-                fmt.Fprintln(os.Stderr, "写入解码数据失败:", err)
-                return
+                return fmt.Errorf("写入解码数据失败: %w", err)
             }
             count -= uint32(chunk)
         }
+    }
+
+    if err := w.Flush(); err != nil {
+        return err
+    }
+    return nil
+}
+
+// RLEDecodeFile 将 RLE 编码文件解码为原始字节序列。
+func RLEDecodeFile(inputPath, outputPath string) {
+    if err := rleDecodeFile(inputPath, outputPath); err != nil {
+        fmt.Fprintln(os.Stderr, err)
     }
 }
 
@@ -164,13 +176,18 @@ func main() {
     inputPath := os.Args[2]
     outputPath := os.Args[3]
 
+    var err error
     switch mode {
     case "encode":
-        RLEEncodeFile(inputPath, outputPath)
+        err = rleEncodeFile(inputPath, outputPath)
     case "decode":
-        RLEDecodeFile(inputPath, outputPath)
+        err = rleDecodeFile(inputPath, outputPath)
     default:
         fmt.Fprintln(os.Stderr, "未知模式，应为 encode 或 decode")
+        os.Exit(1)
+    }
+    if err != nil {
+        fmt.Fprintln(os.Stderr, err)
         os.Exit(1)
     }
 }

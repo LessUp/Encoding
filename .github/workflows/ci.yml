@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Go test (workspace)
+        run: go test ./huffman/go/... ./Run-Length/go/... ./range/go/...
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cargo test
+        run: cargo test --manifest-path range/rust/Cargo.toml
+
+  cpp-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build C++ CLIs
+        run: |
+          g++ -std=c++17 -O2 huffman/cpp/main.cpp -o huffman/cpp/huffman_cpp
+          g++ -std=c++17 -O2 arithmetic/cpp/main.cpp -o arithmetic/cpp/arithmetic_cpp
+          g++ -std=c++17 -O2 Run-Length/cpp/main.cpp -o Run-Length/cpp/rle_cpp
+          g++ -std=c++17 -O2 range/cpp/main.cpp -o range/cpp/rangecoder_cpp

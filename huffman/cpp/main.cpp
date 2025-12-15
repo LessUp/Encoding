@@ -184,24 +184,27 @@ static void write_frequencies(std::ostream& out, const std::vector<uint32_t>& fr
     }
 }
 
-static std::vector<uint32_t> read_frequencies(std::istream& in) {
+static bool read_frequencies(std::istream& in, std::vector<uint32_t>& freq) {
     uint32_t count = 0;
     in.read(reinterpret_cast<char*>(&count), sizeof(count));
-    if (!in || count == 0 || count > 1024) {
-        return std::vector<uint32_t>(SYMBOL_LIMIT, 1);
+    if (!in) {
+        std::cerr << "Failed to read frequency table\n";
+        return false;
     }
-    std::vector<uint32_t> freq(count, 0);
+    if (count != SYMBOL_LIMIT) {
+        std::cerr << "Bad frequency table size: " << count << "\n";
+        return false;
+    }
+    freq.assign(count, 0);
     in.read(reinterpret_cast<char*>(freq.data()), freq.size() * sizeof(uint32_t));
     if (!in) {
-        return std::vector<uint32_t>(SYMBOL_LIMIT, 1);
+        std::cerr << "Failed to read frequency table\n";
+        return false;
     }
-    if (freq.size() != SYMBOL_LIMIT) {
-        freq.assign(SYMBOL_LIMIT, 1);
-    }
-    return freq;
+    return true;
 }
 
-static void compress_file(const std::string& inputPath, const std::string& outputPath) {
+static bool compress_file(const std::string& inputPath, const std::string& outputPath) {
     std::vector<uint32_t> freq = build_frequencies_from_file(inputPath);
     Node* root = build_tree(freq);
     std::vector<std::string> codes(SYMBOL_LIMIT);
@@ -212,13 +215,13 @@ static void compress_file(const std::string& inputPath, const std::string& outpu
     if (!in) {
         std::cerr << "Cannot open input file for reading\n";
         destroy_tree(root);
-        return;
+        return false;
     }
     std::ofstream out(outputPath, std::ios::binary);
     if (!out) {
         std::cerr << "Cannot open output file for writing\n";
         destroy_tree(root);
-        return;
+        return false;
     }
 
     const char magic[4] = {'H', 'F', 'M', 'N'};
@@ -239,37 +242,55 @@ static void compress_file(const std::string& inputPath, const std::string& outpu
         bitWriter.write_bit(b == '1' ? 1 : 0);
     }
     bitWriter.flush();
+
+    if (in.bad()) {
+        std::cerr << "Failed to read input file\n";
+        destroy_tree(root);
+        return false;
+    }
+    if (!out) {
+        std::cerr << "Failed to write output file\n";
+        destroy_tree(root);
+        return false;
+    }
+
     destroy_tree(root);
+    return true;
 }
 
-static void decompress_file(const std::string& inputPath, const std::string& outputPath) {
+static bool decompress_file(const std::string& inputPath, const std::string& outputPath) {
     std::ifstream in(inputPath, std::ios::binary);
     if (!in) {
         std::cerr << "Cannot open input file for reading\n";
-        return;
+        return false;
     }
     char magic[4] = {};
     in.read(magic, sizeof(magic));
     if (!in || magic[0] != 'H' || magic[1] != 'F' || magic[2] != 'M' || magic[3] != 'N') {
         std::cerr << "Invalid input file format\n";
-        return;
+        return false;
     }
 
-    std::vector<uint32_t> freq = read_frequencies(in);
+    std::vector<uint32_t> freq;
+    if (!read_frequencies(in, freq)) {
+        return false;
+    }
     Node* root = build_tree(freq);
     if (!root) {
-        return;
+        return false;
     }
 
     std::ofstream out(outputPath, std::ios::binary);
     if (!out) {
         std::cerr << "Cannot open output file for writing\n";
         destroy_tree(root);
-        return;
+        return false;
     }
 
     BitReader bitReader(in);
     Node* node = root;
+    bool sawEOF = false;
+    bool ok = true;
     while (true) {
         int bit = bitReader.read_bit();
         if (bit == 0) {
@@ -278,15 +299,20 @@ static void decompress_file(const std::string& inputPath, const std::string& out
             node = node->right;
         }
         if (!node) {
+            std::cerr << "Input data corrupted or truncated\n";
+            ok = false;
             break;
         }
         if (is_leaf(node)) {
             if (node->symbol == EOF_SYMBOL) {
+                sawEOF = true;
                 break;
             }
             unsigned char b = static_cast<unsigned char>(node->symbol);
             out.put(static_cast<char>(b));
             if (!out) {
+                std::cerr << "Failed to write output file\n";
+                ok = false;
                 break;
             }
             node = root;
@@ -295,15 +321,21 @@ static void decompress_file(const std::string& inputPath, const std::string& out
             break;
         }
     }
+
+    if (!sawEOF) {
+        std::cerr << "Input data corrupted or truncated\n";
+        ok = false;
+    }
     destroy_tree(root);
+    return ok;
 }
 
 void huffman_encode_file(const std::string& inputPath, const std::string& outputPath) {
-    compress_file(inputPath, outputPath);
+    (void)compress_file(inputPath, outputPath);
 }
 
 void huffman_decode_file(const std::string& inputPath, const std::string& outputPath) {
-    decompress_file(inputPath, outputPath);
+    (void)decompress_file(inputPath, outputPath);
 }
 
 int main(int argc, char** argv) {
@@ -315,14 +347,16 @@ int main(int argc, char** argv) {
     std::string inputPath = argv[2];
     std::string outputPath = argv[3];
 
+    bool ok = true;
+
     if (mode == "encode") {
-        huffman_encode_file(inputPath, outputPath);
+        ok = compress_file(inputPath, outputPath);
     } else if (mode == "decode") {
-        huffman_decode_file(inputPath, outputPath);
+        ok = decompress_file(inputPath, outputPath);
     } else {
         std::cerr << "Unknown mode\n";
         return 1;
     }
 
-    return 0;
+    return ok ? 0 : 1;
 }
